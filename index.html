@@ -3,229 +3,179 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Estrattore Dichiarazione dei Redditi</title>
+  <title>Estrattore LM (RP / RX)</title>
   <style>
-    :root {
-      --bg:#f9fafb;
-      --card:#ffffff;
-      --border:#e5e7eb;
-      --shadow:0 4px 10px rgba(0,0,0,.05);
-    }
-    *{box-sizing:border-box;}
-    body{
-      margin:0;min-height:100vh;
-      font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif;
-      background:var(--bg);color:#111827;line-height:1.5;
-    }
-    header{padding:2rem 1rem;text-align:center;}
-    main{max-width:1000px;margin:0 auto;padding:0 1rem 4rem;}
-    h1{margin:0 0 1rem;font-size:2rem;}
-    h2{font-size:1.25rem;margin:0 0 .5rem;}
-    input[type=file]{margin:1rem 0;font-size:1rem;}
-    #status{margin:.5rem 0;font-style:italic;}
-    .grid{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));}
-    .card{background:var(--card);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow);padding:1rem;overflow:hidden;}
-    table{width:100%;border-collapse:collapse;font-size:.9rem;}
-    th,td{padding:.25rem .5rem;border-bottom:1px solid var(--border);}
-    th{background:#f3f4f6;font-weight:600;text-align:left;}
-    td:last-child{text-align:right;}
-    pre{white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;background:#f3f4f6;padding:.5rem;border-radius:8px;font-size:.8rem;}
-    details summary{cursor:pointer;user-select:none;color:#2563eb;}
+    :root{--bg:#f9fafb;--card:#fff;--border:#e5e7eb;--shadow:0 4px 10px rgba(0,0,0,.05);}
+    *{box-sizing:border-box}
+    body{margin:0;min-height:100vh;font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:#111827}
+    header{padding:2rem 1rem;text-align:center}
+    main{max-width:1000px;margin:0 auto;padding:0 1rem 4rem}
+    h1{margin:0 0 1rem;font-size:2rem}
+    input[type=file]{margin:1rem 0}
+    #status{margin:.5rem 0;font-style:italic}
+    .grid{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+    .card{background:var(--card);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow);padding:1rem}
+    table{width:100%;border-collapse:collapse;font-size:.9rem}
+    th,td{padding:.25rem .5rem;border-bottom:1px solid var(--border)}
+    th{background:#f3f4f6;text-align:left}
+    td:last-child{text-align:right}
+    details summary{cursor:pointer;color:#2563eb}
+    pre{white-space:pre-wrap;max-height:240px;overflow:auto;background:#f3f4f6;padding:.5rem;border-radius:8px;font-size:.8rem}
+    em{color:#6b7280}
   </style>
 </head>
 <body>
-  <header>
-    <h1>Estrai Dati da Dichiarazione Redditi PF</h1>
-    <p>
-      Carica il PDF del Modello Redditi Persone Fisiche.<br>
-      Il tool estrae i quadri <strong>RP</strong>, <strong>RX</strong> e
-      <strong>LM</strong> (con dettaglio di LM22, LM35, LM36, LM39).
-    </p>
-    <input type="file" id="file-input" accept="application/pdf" />
-    <div id="status"></div>
-  </header>
+<header>
+  <h1>Estrai voci LM22 / LM35 / LM36 / LM39</h1>
+  <input type="file" id="file" accept="application/pdf">
+  <div id="status"></div>
+</header>
 
-  <main>
-    <div class="grid" id="results" style="display:none;">
-      <section class="card" id="rpCard">
-        <h2>Quadro RP</h2>
-        <div class="tableWrap"></div>
-        <details><summary>RAW RP</summary><pre id="rpRaw"></pre></details>
-      </section>
+<main>
+  <div id="out" class="grid" style="display:none">
+    <section class="card" id="lmBox">
+      <h2>Quadro LM</h2>
+      <div id="lmTbl"></div>
+      <details><summary>RAW LM</summary><pre id="lmRaw"></pre></details>
+    </section>
+  </div>
+</main>
 
-      <section class="card" id="rxCard">
-        <h2>Quadro RX</h2>
-        <div class="tableWrap"></div>
-        <details><summary>RAW RX</summary><pre id="rxRaw"></pre></details>
-      </section>
+<!-- pdf.js core (senza worker) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<!-- tesseract.js -->
+<script src="https://unpkg.com/tesseract.js@4.0.3/dist/tesseract.min.js"></script>
 
-      <section class="card" id="lmCard">
-        <h2>Quadro LM</h2>
-        <div class="tableWrap"></div>
-        <details><summary>RAW LM</summary><pre id="lmRaw"></pre></details>
-      </section>
-    </div>
-  </main>
+<script>
+const $ = q => document.querySelector(q);
+const status = t => $('#status').textContent = t;
 
-  <!-- pdf.js build completa (core + worker in un unico file) -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.combined.min.js"></script>
-  <!-- tesseract.js per OCR di eventuali scansioni -->
-  <script src="https://unpkg.com/tesseract.js@4.0.3/dist/tesseract.min.js"></script>
+(async function patchWorker(){
+  /* Blocca qualsiasi creazione di Worker prima che venga chiamato pdf.js */
+  const OrigWorker = window.Worker;
+  window.Worker = function(url){           // intercetta
+    if (url && url.toString().includes('pdf.worker')) throw new Error('Worker bloccato');
+    return new OrigWorker(url);
+  };
+})();
 
-  <script>
-    /* ------------ helper DOM ------------ */
-    const $ = s => document.querySelector(s);
-    const setStatus = msg => $('#status').textContent = msg;
-    const resetUI = () => {
-      setStatus('');
-      $('#results').style.display = 'none';
-      ['rp','rx','lm'].forEach(k=>{
-        $(`#${k}Card .tableWrap`).innerHTML='';
-        $(`#${k}Raw`).textContent='';
-      });
-    };
+/* Disattiva esplicitamente il worker di pdf.js */
+if (window.pdfjsLib){
+  pdfjsLib.GlobalWorkerOptions.workerSrc = ''; // evita fetch remoto
+  pdfjsLib.GlobalWorkerOptions.disableWorker = true;
+}
 
-    /* ------------ gestione file ------------ */
-    $('#file-input').addEventListener('change', async e=>{
-      const file = e.target.files[0];
-      if(!file) return;
-      resetUI();
-      try{
-        const buf = await file.arrayBuffer();
-        const text = await extractText(buf);
-        setStatus('Parsing quadri…');
-        const secs = parseSections(text);
-        render('rp',secs.rp);
-        render('rx',secs.rx);
-        render('lm',secs.lm);
-        setStatus('✓ Finito');
-        $('#results').style.display='grid';
-      }catch(err){
-        console.error(err);
-        setStatus('Errore: '+err.message);
+$('#file').addEventListener('change', async ev=>{
+  const file = ev.target.files[0];
+  if(!file) return;
+  $('#out').style.display="none";
+  status('Lettura PDF…');
+  try{
+    const buf = await file.arrayBuffer();
+    let txt = await extractText(buf);
+    status('Parsing quadri…');
+    const lm = parseLM(txt);
+    renderLM(lm.blockRaw,lm.data);
+    status('✓ Finito');
+    $('#out').style.display="grid";
+  }catch(err){
+    console.error(err);
+    status('Errore: '+err.message);
+  }
+});
+
+/* ---------- estrazione testo ---------- */
+async function extractText(buffer){
+  /* Tentativo 1 – pdf.js senza worker */
+  if(window.pdfjsLib){
+    try{
+      const doc = await pdfjsLib.getDocument({data:buffer}).promise;
+      let out='';
+      for(let p=1;p<=doc.numPages;p++){
+        const pg = await doc.getPage(p);
+        const {items} = await pg.getTextContent();
+        out += items.map(i=>i.str).join(' ') + '\\n';
       }
-    });
+      if(out.replace(/\\s+/g,'').length>300) return out;
+    }catch(e){ console.warn('pdf.js fallito',e); }
+  }
 
-    /* ------------ estrazione testo ------------ */
-    async function extractText(buffer){
-      // 1) pdf.js
-      try{
-        const pdf = await pdfjsLib.getDocument({data:buffer}).promise;
-        let out='';
-        for(let p=1;p<=pdf.numPages;p++){
-          const page = await pdf.getPage(p);
-          const {items} = await page.getTextContent();
-          out += items.map(t=>t.str).join(' ') + '\\n';
-        }
-        if(out.replace(/\\s+/g,'').length>300) return out;
-      }catch(e){ console.warn('pdf.js fallita',e); }
+  /* Tentativo 2 – decodifica grezza */
+  let raw = new TextDecoder('latin1').decode(buffer);
+  if(raw.replace(/\\s+/g,'').length>300) return raw;
 
-      // 2) raw decode
-      let raw = new TextDecoder('latin1').decode(buffer);
-      if(raw.replace(/\\s+/g,'').length>300) return raw;
+  /* Tentativo 3 – OCR last resort (richiede pdf.js) */
+  if(window.pdfjsLib){
+    status('OCR (lentissimo) in corso…');
+    const doc = await pdfjsLib.getDocument({data:buffer}).promise;
+    raw='';
+    for(let p=1;p<=doc.numPages;p++){
+      status(\`OCR pagina \${p}/\${doc.numPages}…\`);
+      const pg = await doc.getPage(p);
+      const vp = pg.getViewport({scale:1.4});
+      const cv = document.createElement('canvas');
+      cv.width = vp.width; cv.height = vp.height;
+      await pg.render({canvasContext:cv.getContext('2d'),viewport:vp}).promise;
+      const {data:{text}} = await Tesseract.recognize(cv,'ita');
+      raw += text + '\\n';
+    }
+  }
+  return raw;
+}
 
-      // 3) OCR (solo se pdf.js disponibile)
-      if(typeof pdfjsLib!=='undefined'){
-        setStatus('OCR in corso…');
-        const pdf = await pdfjsLib.getDocument({data:buffer}).promise;
-        raw='';
-        for(let p=1;p<=pdf.numPages;p++){
-          setStatus(\`OCR pagina \${p}/\${pdf.numPages}…\`);
-          const page = await pdf.getPage(p);
-          const vp = page.getViewport({scale:1.5});
-          const canvas = document.createElement('canvas');
-          canvas.width = vp.width; canvas.height = vp.height;
-          await page.render({canvasContext:canvas.getContext('2d'), viewport:vp}).promise;
-          const {data:{text}} = await Tesseract.recognize(canvas,'ita');
-          raw += text + '\\n';
-        }
-      }
-      return raw;
-    }
+/* ---------- parsing LM ---------- */
+function parseLM(allTxt){
+  const flat = allTxt.replace(/\\n+/g,' ').replace(/\\s{2,}/g,' ').trim();
+  const lmStart = flat.search(/QUADRO LM/i) >=0 ? flat.search(/QUADRO LM/i)
+                 : flat.search(/\\bLM\\d{1,3}\\b/);
+  if(lmStart<0) return {data:{},blockRaw:''};
+  const nextQuadro = flat.slice(lmStart).search(/QUADRO [A-Z]{1,2}/i);
+  const block = nextQuadro>0 ? flat.slice(lmStart,lmStart+nextQuadro) : flat.slice(lmStart);
 
-    /* ------------ parsing  ------------ */
-    function parseSections(txt){
-      const flat = txt.replace(/\\n+/g,' ').replace(/\\s{2,}/g,' ').trim();
-      const idx={
-        rp: flat.search(/QUADRO RP/i),
-        rx: flat.search(/QUADRO RX/i),
-        lm: flat.search(/QUADRO LM/i)
-      };
-      if(idx.rp===-1) idx.rp = flat.search(/\\bRP\\d{1,3}\\b/);
-      if(idx.rx===-1) idx.rx = flat.search(/\\bRX\\d{1,3}\\b/);
-      if(idx.lm===-1) idx.lm = flat.search(/\\bLM\\d{1,3}\\b/);
-      const order = Object.entries(idx).filter(([,v])=>v>=0).sort((a,b)=>a[1]-b[1]);
-      const slice = k=>{
-        if(idx[k]<0) return '';
-        const i = order.findIndex(([key])=>key===k);
-        const end = i<order.length-1 ? order[i+1][1] : flat.length;
-        return flat.slice(idx[k],end);
-      };
-      return {
-        rp:{raw:slice('rp'),data:parseGeneric(slice('rp'),'RP')},
-        rx:{raw:slice('rx'),data:parseRX(slice('rx'))},
-        lm:{raw:slice('lm'),data:parseLM(slice('lm'))}
-      };
-    }
+  const out = {};
 
-    function parseGeneric(block,prefix){
-      const obj={}; if(!block) return obj;
-      const re=new RegExp(prefix+\"(\\\\d{1,3})([\\\\s\\\\S]*?)(?=\"+prefix+\"\\\\d{1,3}|$)\",'gi');
-      let m; while((m=re.exec(block))!==null){
-        const code=prefix+m[1];
-        const nums=m[2].match(/\\d[\\d\\.]*,[\\d]{2}/g);
-        if(nums) obj[code]=nums.pop();
-      }
-      return obj;
-    }
-    function parseRX(block){
-      const d=parseGeneric(block,'RX'); if(!block) return d;
-      const cred=block.match(/credito[^\\d]*?(\\d[\\d\\.]*,[\\d]{2})/i);
-      const deb =block.match(/debito[^\\d]*?(\\d[\\d\\.]*,[\\d]{2})/i);
-      if(cred) d['Credito IRPEF']=cred[1];
-      if(deb)  d['Debito IRPEF'] =deb[1];
-      return d;
-    }
-    function parseLM(block){
-      const out=parseGeneric(block,'LM'); if(!block) return out;
-      // LM22
-      const lm22=block.match(/LM22\\s+(\\d{4,6})\\s+(\\d{1,3})%?\\s+(\\d[\\d\\.]*,[\\d]{2})/i);
-      if(lm22){
-        out['Codice ATECO']               = lm22[1];
-        out['Coeff. redditività (%)']     = lm22[2];
-        out['Componenti positivi (LM22)'] = lm22[3];
-      }
-      // LM35 contributi
-      const lm35 = block.match(/LM35[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i);
-      if(lm35) out['Contributi versati (LM35)'] = lm35[1];
-      // LM36 reddito netto
-      const lm36 = block.match(/LM36[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i);
-      if(lm36) out['Reddito netto (LM36)'] = lm36[1];
-      // LM39 imposta sostitutiva
-      const lm39 = block.match(/LM39[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i);
-      if(lm39) out['Imposta sostitutiva (LM39)'] = lm39[1];
-      return out;
-    }
+  /* LM22 */
+  const lm22 = block.match(/LM22\\s+(\\d{4,6})\\s+(\\d{1,3})%?\\s+(\\d[\\d\\.]*,[\\d]{2})/i);
+  if(lm22){
+    out['Codice ATECO']               = lm22[1];
+    out['Coeff. redditività (%)']     = lm22[2];
+    out['Componenti positivi']        = lm22[3];
+  }
 
-    /* ------------ rendering ------------ */
-    function render(key,sec){
-      const wrap=$(`#${key}Card .tableWrap`);
-      const raw=$(`#${key}Raw`);
-      if(!sec.raw){ wrap.innerHTML='<em>Quadro non trovato</em>'; return; }
-      raw.textContent=sec.raw.slice(0,6000)+(sec.raw.length>6000?'…':'');
-      const rows=Object.entries(sec.data).sort((a,b)=>a[0].localeCompare(b[0],'it',{numeric:true}));
-      if(!rows.length){ wrap.innerHTML='<em>Nessun dato estratto</em>'; return; }
-      const tbl=document.createElement('table');
-      tbl.innerHTML='<thead><tr><th>Campo</th><th>Valore</th></tr></thead>';
-      const tbody=document.createElement('tbody');
-      rows.forEach(([c,v])=>{
-        const tr=document.createElement('tr');
-        tr.innerHTML=`<td>${c}</td><td>${v}</td>`;
-        tbody.appendChild(tr);
-      });
-      tbl.appendChild(tbody);
-      wrap.appendChild(tbl);
-    }
-  </script>
+  /* LM35 – Contributi */
+  const lm35 = block.match(/LM35[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i);
+  if(lm35) out['Contributi versati']  = lm35[1];
+
+  /* LM36 – Reddito netto */
+  const lm36 = block.match(/LM36[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i);
+  if(lm36) out['Reddito netto']       = lm36[1];
+
+  /* LM39 – Imposta sostitutiva */
+  const lm39 = block.match(/LM39[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i);
+  if(lm39) out['Imposta sostitutiva'] = lm39[1];
+
+  return {data:out, blockRaw:block};
+}
+
+/* ---------- rendering ---------- */
+function renderLM(rawTxt,obj){
+  $('#lmRaw').textContent = rawTxt.slice(0,5000)+(rawTxt.length>5000?'…':'');
+  const box = $('#lmTbl');
+  if(!Object.keys(obj).length){
+    box.innerHTML = '<em>Quadro LM non trovato o valori non estratti</em>';
+    return;
+  }
+  const tbl = document.createElement('table');
+  tbl.innerHTML='<thead><tr><th>Campo</th><th>Valore</th></tr></thead>';
+  const tb = document.createElement('tbody');
+  Object.entries(obj).forEach(([k,v])=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${k}</td><td>${v}</td>`;
+    tb.appendChild(tr);
+  });
+  tbl.appendChild(tb);
+  box.innerHTML=''; box.appendChild(tbl);
+}
+</script>
 </body>
 </html>
