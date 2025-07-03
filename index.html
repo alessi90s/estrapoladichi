@@ -28,8 +28,7 @@
 </head>
 <body>
 <header>
-  <h1>Estrai voci LM22&nbsp;/ LM35&nbsp;/ LM36&nbsp;/ LM39</h1>
-
+  <h1>Estrai voci&nbsp;LM22 / LM35 / LM36 / LM39</h1>
   <input type="file" id="file" accept="application/pdf">
   <button id="go" disabled>Estrai dati</button>
   <div id="status" class="info">Seleziona un PDF per iniziare</div>
@@ -45,178 +44,53 @@
   </div>
 </main>
 
-<!-- pdf.js (core: nessun worker esterno) -->
+<!-- pdf.js core -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<!-- tesseract.js per l’OCR di emergenza -->
+<!-- tesseract.js -->
 <script src="https://unpkg.com/tesseract.js@4.0.3/dist/tesseract.min.js"></script>
 
 <script>
-/* ---------- PATCH: blocca i web-worker di pdf.js ---------- */
-if (window.Worker) {
-  const OrigWorker = Worker;
-  window.Worker = function (url) {
-    if (url && url.toString().includes('pdf.worker')) throw new Error('Worker bloccato dal sandbox');
-    return new OrigWorker(url);
-  };
+/* patch: niente worker */
+if(window.Worker){
+  const Orig=Worker;
+  window.Worker=function(u){if(u&&u.toString().includes('pdf.worker'))throw new Error('worker bloccato');return new Orig(u);}
 }
-if (window.pdfjsLib) {                  // esegue pdf.js in “fake-worker” nel main-thread
-  pdfjsLib.GlobalWorkerOptions.disableWorker = true;
-  pdfjsLib.GlobalWorkerOptions.workerSrc = '';
-}
+if(window.pdfjsLib){pdfjsLib.GlobalWorkerOptions.disableWorker=true;pdfjsLib.GlobalWorkerOptions.workerSrc='';}
 
-/* ---------- VARIABILI DI STATO ---------- */
-let buffer = null;                      // conterrà l’ArrayBuffer del PDF
-const fileInput = document.getElementById('file');
-const goBtn     = document.getElementById('go');
-const $         = q => document.querySelector(q);
-const setStatus = (txt, cls = 'info') => {
-  const el = document.getElementById('status');
-  el.textContent = txt;
-  el.className = cls;
-};
+/* helpers */
+const $=q=>document.querySelector(q);
+const setStatus=(t,c='info')=>{$('#status').textContent=t;$('#status').className=c;};
 
-/* ---------- SELEZIONE FILE ---------- */
-fileInput.addEventListener('change', async ev => {
-  const file = ev.target.files[0];
-  buffer = null;
-  goBtn.disabled = true;
-  $('#out').style.display = 'none';
+/* stato */
+let buf=null;$('#file').addEventListener('change',async e=>{const f=e.target.files[0];$('#out').style.display='none';buf=null;$('#go').disabled=true;if(!f){setStatus('Nessun file selezionato','err');return;}buf=await f.arrayBuffer();setStatus('PDF caricato, pronto all’estrazione','ok');$('#go').disabled=false;});
 
-  if (!file) {
-    setStatus('Nessun file selezionato', 'err');
-    return;
-  }
+$('#go').addEventListener('click',async()=>{if(!buf){setStatus('Seleziona prima un PDF','err');return;}$('#go').disabled=true;setStatus('Lettura PDF…');try{const txt=await extractText(buf);setStatus('Parsing LM…');const lm=parseLM(txt);renderLM(lm.blockRaw,lm.data);if(Object.keys(lm.data).length)setStatus('✓ Dati estratti','ok');else setStatus('Valori LM non trovati','err');$('#out').style.display='grid';}catch(err){console.error(err);setStatus('Errore: '+err.message,'err');}finally{$('#go').disabled=false;}});
 
-  setStatus('PDF caricato, pronto all’estrazione', 'ok');
-  buffer = await file.arrayBuffer();
-  goBtn.disabled = false;               // abilita il pulsante!
-});
+/* estrazione testo */
+async function extractText(b){if(window.pdfjsLib){try{const d=await pdfjsLib.getDocument({data:b}).promise;let o='';for(let p=1;p<=d.numPages;p++){const pg=await d.getPage(p);const {items}=await pg.getTextContent();o+=items.map(i=>i.str).join(' ')+'\\n';}if(o.replace(/\\s+/g,'').length>300)return o;}catch(e){}}
+let raw=new TextDecoder('latin1').decode(b);if(raw.replace(/\\s+/g,'').length>300)return raw;
+return raw;}
 
-/* ---------- CLICK SU “ESTRAI DATI” ---------- */
-goBtn.addEventListener('click', async () => {
-  if (!buffer) {
-    setStatus('Seleziona prima un PDF', 'err');
-    return;
-  }
+/* parsing LM con spazi/etichette */
+function parseLM(t){const f=t.replace(/\\n+/g,' ').replace(/\\s{2,}/g,' ').trim();const s=f.search(/QUADRO LM/i)>=0?f.search(/QUADRO LM/i):f.search(/\\bLM\\s*\\d{1,3}\\b/);if(s<0)return{data:{},blockRaw:''};const e=f.slice(s).search(/QUADRO [A-Z]{1,2}/i);const blk=e>0?f.slice(s,s+e):f.slice(s);const o={};
+/* 1. ATECO + coeff + comp. positivi  */
+let m=blk.match(/Codice attività\\s+(\\d{4,6}).+?Coeff\\w*\\s+(\\d{1,3})%?.+?Componenti positivi[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i);
+if(!m) m=blk.match(/LM\\s*22\\s+(\\d{4,6})\\s+(\\d{1,3})%?\\s+(\\d[\\d\\.]*,[\\d]{2})/i);
+if(m){o['Codice ATECO']=m[1];o['Coeff. redditività (%)']=m[2];o['Componenti positivi']=m[3];}
+/* 2. Contributi */
+m=blk.match(/Contributi (?:previdenziali[\\w\\s]*?)?[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i)||blk.match(/LM\\s*35[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i);
+if(m) o['Contributi versati']=m[1];
+/* 3. Reddito netto */
+m=blk.match(/Reddito netto[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i)||blk.match(/LM\\s*36[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i);
+if(m) o['Reddito netto']=m[1];
+/* 4. Imposta sostitutiva */
+m=blk.match(/Imposta sostitutiva[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i)||blk.match(/LM\\s*39[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i);
+if(m) o['Imposta sostitutiva']=m[1];
 
-  goBtn.disabled = true;               // evita doppi clic
-  setStatus('Lettura PDF…');
-  $('#out').style.display = 'none';
+return{data:o,blockRaw:blk};}
 
-  try {
-    const txt = await extractText(buffer);
-    setStatus('Parsing quadro LM…');
-    const lm  = parseLM(txt);
-    renderLM(lm.blockRaw, lm.data);
-
-    if (Object.keys(lm.data).length) {
-      setStatus('✓ Dati estratti con successo', 'ok');
-    } else {
-      setStatus('Quadro LM non trovato o valori non riconosciuti', 'err');
-    }
-
-    $('#out').style.display = 'grid';
-  } catch (err) {
-    console.error(err);
-    setStatus('Errore: ' + err.message, 'err');
-  } finally {
-    goBtn.disabled = false;
-  }
-});
-
-/* ---------- ESTRARRE TESTO (3 metodi) ---------- */
-async function extractText(buf) {
-  /* 1️⃣ pdf.js */
-  if (window.pdfjsLib) {
-    try {
-      const doc = await pdfjsLib.getDocument({ data: buf }).promise;
-      let out = '';
-      for (let p = 1; p <= doc.numPages; p++) {
-        const pg = await doc.getPage(p);
-        const { items } = await pg.getTextContent();
-        out += items.map(i => i.str).join(' ') + '\n';
-      }
-      if (out.replace(/\s+/g, '').length > 300) return out;
-    } catch (e) { console.warn('pdf.js fallito', e); }
-  }
-
-  /* 2️⃣ decodifica grezza */
-  let raw = new TextDecoder('latin1').decode(buf);
-  if (raw.replace(/\s+/g, '').length > 300) return raw;
-
-  /* 3️⃣ OCR (lento, solo se pdf.js presente) */
-  if (window.pdfjsLib) {
-    setStatus('OCR in corso – potrebbe richiedere tempo…');
-    const doc = await pdfjsLib.getDocument({ data: buf }).promise;
-    raw = '';
-    for (let p = 1; p <= doc.numPages; p++) {
-      setStatus(`OCR pagina ${p}/${doc.numPages}…`);
-      const pg = await doc.getPage(p);
-      const vp = pg.getViewport({ scale: 1.4 });
-      const cv = document.createElement('canvas');
-      cv.width = vp.width; cv.height = vp.height;
-      await pg.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
-      const { data: { text } } = await Tesseract.recognize(cv, 'ita');
-      raw += text + '\n';
-    }
-  }
-  return raw;
-}
-
-/* ---------- PARSING QUADRO LM ---------- */
-function parseLM(allTxt) {
-  const flat  = allTxt.replace(/\n+/g, ' ').replace(/\s{2,}/g, ' ').trim();
-  const start = flat.search(/QUADRO LM/i) >= 0 ? flat.search(/QUADRO LM/i)
-                : flat.search(/\bLM\d{1,3}\b/);
-  if (start < 0) return { data: {}, blockRaw: '' };
-
-  const nextQ = flat.slice(start).search(/QUADRO [A-Z]{1,2}/i);
-  const block = nextQ > 0 ? flat.slice(start, start + nextQ) : flat.slice(start);
-  const out   = {};
-
-  // LM22
-  const lm22 = block.match(/LM22\s+(\d{4,6})\s+(\d{1,3})%?\s+(\d[\d\.]*,[\d]{2})/i);
-  if (lm22) {
-    out['Codice ATECO']           = lm22[1];
-    out['Coeff. redditività (%)'] = lm22[2];
-    out['Componenti positivi']    = lm22[3];
-  }
-  // LM35
-  const lm35 = block.match(/LM35[^\d]*(\d[\d\.]*,[\d]{2})/i);
-  if (lm35) out['Contributi versati'] = lm35[1];
-  // LM36
-  const lm36 = block.match(/LM36[^\d]*(\d[\d\.]*,[\d]{2})/i);
-  if (lm36) out['Reddito netto'] = lm36[1];
-  // LM39
-  const lm39 = block.match(/LM39[^\d]*(\d[\d\.]*,[\d]{2})/i);
-  if (lm39) out['Imposta sostitutiva'] = lm39[1];
-
-  return { data: out, blockRaw: block };
-}
-
-/* ---------- RENDER ---------- */
-function renderLM(rawTxt, obj) {
-  $('#lmRaw').textContent = rawTxt.slice(0, 5000) + (rawTxt.length > 5000 ? '…' : '');
-  const box = $('#lmTbl');
-
-  if (!Object.keys(obj).length) {
-    box.innerHTML = '<em>Quadro LM non trovato o valori non estratti</em>';
-    return;
-  }
-
-  const tbl = document.createElement('table');
-  tbl.innerHTML = '<thead><tr><th>Campo</th><th>Valore</th></tr></thead>';
-  const tb = document.createElement('tbody');
-
-  Object.entries(obj).forEach(([k, v]) => {
-    const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${k}</td><td>${v}</td>`;
-    tb.appendChild(tr);
-  });
-
-  tbl.appendChild(tb);
-  box.innerHTML = ''; box.appendChild(tbl);
-}
+/* rendering */
+function renderLM(raw,d){$('#lmRaw').textContent=raw.slice(0,6000)+(raw.length>6000?'…':'');const box=$('#lmTbl');if(!Object.keys(d).length){box.innerHTML='<em>Nessun dato LM estratto</em>';return;}const tbl=document.createElement('table');tbl.innerHTML='<thead><tr><th>Campo</th><th>Valore</th></tr></thead>';const tb=document.createElement('tbody');Object.entries(d).forEach(([k,v])=>{const tr=document.createElement('tr');tr.innerHTML=`<td>${k}</td><td>${v}</td>`;tb.appendChild(tr);});tbl.appendChild(tb);box.innerHTML='';box.appendChild(tbl);}
 </script>
 </body>
 </html>
