@@ -1,8 +1,8 @@
 <!DOCTYPE html>
 <html lang="it">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Estrattore LM22 / LM35 / LM36 / LM39</title>
 <style>
   :root{--bg:#f9fafb;--card:#fff;--border:#e5e7eb;--shadow:0 4px 10px rgba(0,0,0,.05);}
@@ -11,10 +11,10 @@
   header{padding:2rem 1rem;text-align:center}
   main{max-width:1000px;margin:0 auto;padding:0 1rem 4rem}
   h1{margin:0 0 1rem;font-size:2rem}
-  input[type=file]{margin:.5rem 0}
-  #go{margin-left:.5rem;padding:.45rem 1.2rem;border:0;border-radius:6px;background:#2563eb;color:#fff;font-size:1rem;cursor:pointer;box-shadow:var(--shadow);transition:opacity .2s}
-  #go:disabled{background:#9ca3af;cursor:not-allowed;opacity:.65}
-  #status{margin:.75rem 0;min-height:1.25em;font-style:italic;font-size:.95rem}
+  input[type=file]{margin:.6rem 0}
+  #go{margin-left:.6rem;padding:.45rem 1.3rem;border:0;border-radius:6px;background:#2563eb;color:#fff;font-size:1rem;cursor:pointer;box-shadow:var(--shadow);transition:opacity .2s}
+  #go:disabled{background:#9ca3af;cursor:not-allowed;opacity:.6}
+  #status{margin:.8rem 0;min-height:1.3em;font-style:italic;font-size:.95rem}
   .err{color:#b91c1c}.ok{color:#047857}.info{color:#374151}
   .grid{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
   .card{background:var(--card);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow);padding:1rem}
@@ -36,7 +36,7 @@
 
 <main>
   <div id="out" class="grid" style="display:none">
-    <section class="card" id="lmBox">
+    <section class="card">
       <h2>Quadro LM</h2>
       <div id="lmTbl"></div>
       <details><summary>RAW LM</summary><pre id="lmRaw"></pre></details>
@@ -44,53 +44,108 @@
   </div>
 </main>
 
-<!-- pdf.js core -->
+<!-- pdf.js core (senza worker esterno) -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<!-- tesseract.js -->
+<!-- tesseract.js (solo per OCR di emergenza) -->
 <script src="https://unpkg.com/tesseract.js@4.0.3/dist/tesseract.min.js"></script>
 
 <script>
-/* patch: niente worker */
+/* ---- Worker patch: disabilita pdf.worker ---- */
 if(window.Worker){
-  const Orig=Worker;
-  window.Worker=function(u){if(u&&u.toString().includes('pdf.worker'))throw new Error('worker bloccato');return new Orig(u);}
+  const O=Worker;
+  window.Worker=function(u){if(u&&u.toString().includes('pdf.worker'))throw new Error('worker bloccato');return new O(u);};
 }
-if(window.pdfjsLib){pdfjsLib.GlobalWorkerOptions.disableWorker=true;pdfjsLib.GlobalWorkerOptions.workerSrc='';}
+if(window.pdfjsLib){
+  pdfjsLib.GlobalWorkerOptions.disableWorker=true;
+  pdfjsLib.GlobalWorkerOptions.workerSrc='';
+}
 
-/* helpers */
+/* ---- util ---- */
 const $=q=>document.querySelector(q);
-const setStatus=(t,c='info')=>{$('#status').textContent=t;$('#status').className=c;};
+const setStatus=(t,c='info')=>{const s=$('#status');s.textContent=t;s.className=c;};
 
-/* stato */
-let buf=null;$('#file').addEventListener('change',async e=>{const f=e.target.files[0];$('#out').style.display='none';buf=null;$('#go').disabled=true;if(!f){setStatus('Nessun file selezionato','err');return;}buf=await f.arrayBuffer();setStatus('PDF caricato, pronto all’estrazione','ok');$('#go').disabled=false;});
+/* ---- stato ---- */
+let buffer=null;
+$('#file').addEventListener('change',async e=>{
+  const f=e.target.files[0];
+  buffer=null;$('#go').disabled=true;$('#out').style.display='none';
+  if(!f){setStatus('Nessun file selezionato','err');return;}
+  buffer=await f.arrayBuffer();
+  setStatus('PDF caricato, premi “Estrai dati”','ok');
+  $('#go').disabled=false;
+});
 
-$('#go').addEventListener('click',async()=>{if(!buf){setStatus('Seleziona prima un PDF','err');return;}$('#go').disabled=true;setStatus('Lettura PDF…');try{const txt=await extractText(buf);setStatus('Parsing LM…');const lm=parseLM(txt);renderLM(lm.blockRaw,lm.data);if(Object.keys(lm.data).length)setStatus('✓ Dati estratti','ok');else setStatus('Valori LM non trovati','err');$('#out').style.display='grid';}catch(err){console.error(err);setStatus('Errore: '+err.message,'err');}finally{$('#go').disabled=false;}});
+$('#go').addEventListener('click',async()=>{
+  if(!buffer){setStatus('Carica prima un PDF','err');return;}
+  $('#go').disabled=true; setStatus('Estrazione in corso…','info');
+  try{
+    const txt=await extractText(buffer);
+    const lm=parseLM(txt);
+    renderLM(lm.blockRaw,lm.data);
+    $('#out').style.display='grid';
+    Object.keys(lm.data).length?setStatus('✓ Dati estratti','ok'):setStatus('Valori LM non trovati','err');
+  }catch(e){console.error(e);setStatus('Errore: '+e.message,'err');}
+  $('#go').disabled=false;
+});
 
-/* estrazione testo */
-async function extractText(b){if(window.pdfjsLib){try{const d=await pdfjsLib.getDocument({data:b}).promise;let o='';for(let p=1;p<=d.numPages;p++){const pg=await d.getPage(p);const {items}=await pg.getTextContent();o+=items.map(i=>i.str).join(' ')+'\\n';}if(o.replace(/\\s+/g,'').length>300)return o;}catch(e){}}
-let raw=new TextDecoder('latin1').decode(b);if(raw.replace(/\\s+/g,'').length>300)return raw;
-return raw;}
+/* ---- estrazione testo ---- */
+async function extractText(buf){
+  if(window.pdfjsLib){
+    try{
+      const doc=await pdfjsLib.getDocument({data:buf}).promise;
+      let t='';for(let p=1;p<=doc.numPages;p++){const pg=await doc.getPage(p);const {items}=await pg.getTextContent();t+=items.map(i=>i.str).join(' ')+'\\n';}
+      if(t.replace(/\\s+/g,'').length>300)return t;
+    }catch{}
+  }
+  const raw=new TextDecoder('latin1').decode(buf);
+  return raw;
+}
 
-/* parsing LM con spazi/etichette */
-function parseLM(t){const f=t.replace(/\\n+/g,' ').replace(/\\s{2,}/g,' ').trim();const s=f.search(/QUADRO LM/i)>=0?f.search(/QUADRO LM/i):f.search(/\\bLM\\s*\\d{1,3}\\b/);if(s<0)return{data:{},blockRaw:''};const e=f.slice(s).search(/QUADRO [A-Z]{1,2}/i);const blk=e>0?f.slice(s,s+e):f.slice(s);const o={};
-/* 1. ATECO + coeff + comp. positivi  */
-let m=blk.match(/Codice attività\\s+(\\d{4,6}).+?Coeff\\w*\\s+(\\d{1,3})%?.+?Componenti positivi[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i);
-if(!m) m=blk.match(/LM\\s*22\\s+(\\d{4,6})\\s+(\\d{1,3})%?\\s+(\\d[\\d\\.]*,[\\d]{2})/i);
-if(m){o['Codice ATECO']=m[1];o['Coeff. redditività (%)']=m[2];o['Componenti positivi']=m[3];}
-/* 2. Contributi */
-m=blk.match(/Contributi (?:previdenziali[\\w\\s]*?)?[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i)||blk.match(/LM\\s*35[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i);
-if(m) o['Contributi versati']=m[1];
-/* 3. Reddito netto */
-m=blk.match(/Reddito netto[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i)||blk.match(/LM\\s*36[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i);
-if(m) o['Reddito netto']=m[1];
-/* 4. Imposta sostitutiva */
-m=blk.match(/Imposta sostitutiva[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i)||blk.match(/LM\\s*39[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i);
-if(m) o['Imposta sostitutiva']=m[1];
+/* ---- parsing quadro LM ---- */
+function parseLM(all){
+  const flat=all.replace(/\\n+/g,' ').replace(/\\s{2,}/g,' ').trim();
+  const i=flat.search(/QUADRO LM/i)>=0?flat.search(/QUADRO LM/i):flat.search(/\\bLM\\s*\\d{1,3}\\b/);
+  if(i<0)return{data:{},blockRaw:''};
+  const end=flat.slice(i).search(/QUADRO [A-Z]{1,2}/i);
+  const blk=end>0?flat.slice(i,i+end):flat.slice(i);
+  const o={};
 
-return{data:o,blockRaw:blk};}
+  /* --- LM22 con spazi/etichette --- */
+  let m=blk.match(/LM\\s*22\\s+(\\d{4,6})\\s+(\\d{1,3})%?\\s+\\d+\\s+(\\d[\\d\\.]*,[\\d]{2})[\\s\\S]+? (\\d[\\d\\.]*,[\\d]{2})/i);
+  if(!m) m=blk.match(/Codice attività\\s+(\\d{4,6}).+?Coeff\\w*\\s+(\\d{1,3})%?.+?Componenti positivi[^\\d]*(\\d[\\d\\.]*,[\\d]{2}).+?Reddito per attività[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i);
+  if(m){o['Codice ATECO']=m[1];o['Coeff. redditività (%)']=m[2];o['Componenti positivi']=m[3];o['Reddito per attività']=m[4];}
 
-/* rendering */
-function renderLM(raw,d){$('#lmRaw').textContent=raw.slice(0,6000)+(raw.length>6000?'…':'');const box=$('#lmTbl');if(!Object.keys(d).length){box.innerHTML='<em>Nessun dato LM estratto</em>';return;}const tbl=document.createElement('table');tbl.innerHTML='<thead><tr><th>Campo</th><th>Valore</th></tr></thead>';const tb=document.createElement('tbody');Object.entries(d).forEach(([k,v])=>{const tr=document.createElement('tr');tr.innerHTML=`<td>${k}</td><td>${v}</td>`;tb.appendChild(tr);});tbl.appendChild(tb);box.innerHTML='';box.appendChild(tbl);}
+  /* --- LM35 --- */
+  m=blk.match(/LM\\s*35[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i)||blk.match(/Contributi[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i);
+  if(m)o['Contributi versati']=m[1];
+
+  /* --- LM36 --- */
+  m=blk.match(/LM\\s*36[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i)||blk.match(/Reddito netto[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i);
+  if(m)o['Reddito netto']=m[1];
+
+  /* --- LM39 --- */
+  m=blk.match(/LM\\s*39[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i)||blk.match(/Imposta sostitutiva[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i);
+  if(m)o['Imposta sostitutiva']=m[1];
+
+  return{data:o,blockRaw:blk};
+}
+
+/* ---- rendering tabella ---- */
+function renderLM(raw,obj){
+  $('#lmRaw').textContent=raw.slice(0,6000)+(raw.length>6000?'…':'');
+  const box=$('#lmTbl');
+  if(!Object.keys(obj).length){box.innerHTML='<em>Nessun dato LM estratto</em>';return;}
+  const tbl=document.createElement('table');
+  tbl.innerHTML='<thead><tr><th>Campo</th><th>Valore</th></tr></thead>';
+  const tb=document.createElement('tbody');
+  Object.entries(obj).forEach(([k,v])=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${k}</td><td>${v}</td>`;
+    tb.appendChild(tr);
+  });
+  tbl.appendChild(tb);
+  box.innerHTML='';box.appendChild(tbl);
+}
 </script>
 </body>
 </html>
