@@ -2,20 +2,20 @@
 <html lang="it">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Estrattore LM da immagine</title>
 <style>
   :root{--bg:#f9fafb;--card:#fff;--border:#e5e7eb;--shadow:0 4px 10px rgba(0,0,0,.05);}
   *{box-sizing:border-box}
   body{margin:0;min-height:100vh;font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:#111827}
   header{padding:2rem 1rem;text-align:center}
-  main{max-width:900px;margin:0 auto;padding:0 1rem 4rem}
   h1{margin:0 0 1rem;font-size:2rem}
   input[type=file]{margin:.6rem 0}
   #go{margin-left:.6rem;padding:.45rem 1.3rem;border:0;border-radius:6px;background:#2563eb;color:#fff;font-size:1rem;cursor:pointer;box-shadow:var(--shadow)}
   #go:disabled{background:#9ca3af;cursor:not-allowed;opacity:.6}
   #status{margin:.8rem 0;min-height:1.3em;font-style:italic;font-size:.95rem}
   .err{color:#b91c1c}.ok{color:#047857}.info{color:#374151}
+  main{max-width:900px;margin:0 auto;padding:0 1rem 4rem}
   .card{background:var(--card);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow);padding:1rem}
   table{width:100%;border-collapse:collapse;font-size:.9rem}
   th,td{padding:.25rem .5rem;border-bottom:1px solid var(--border)}th{background:#f3f4f6;text-align:left}
@@ -27,10 +27,10 @@
 </head>
 <body>
 <header>
-  <h1>Estrai voci&nbsp;LM22 / LM35 / LM36 / LM39 (da JPEG/PNG)</h1>
-  <input type="file" id="img" accept="image/*">
+  <h1>Estrai LM22 / LM35 / LM36 / LM39 (da immagine)</h1>
+  <input type="file" id="file" accept="image/*">
   <button id="go" disabled>Estrai dati</button>
-  <div id="status" class="info">Carica un’immagine del quadro LM</div>
+  <div id="status" class="info">Carica uno screenshot nitido del quadro LM</div>
 </header>
 
 <main>
@@ -41,47 +41,54 @@
   </section>
 </main>
 
-<!-- tesseract.js -->
-<script src="https://unpkg.com/tesseract.js@4.0.3/dist/tesseract.min.js"></script>
-<script>
+<!-- tesseract.js (ESM: include createWorker) -->
+<script type="module">
+import { createWorker } from "https://unpkg.com/tesseract.js@4.0.3/dist/tesseract.min.js";
+
 const $ = q => document.querySelector(q);
-const setStatus = (t,c='info')=>{const el=$('#status');el.textContent=t;el.className=c;};
+const setStatus = (t,c='info') => { const el=$('#status'); el.textContent=t; el.className=c; };
 
-let imgData=null;
-$('#img').addEventListener('change',e=>{
-  const f=e.target.files[0];
-  imgData=null; $('#go').disabled=true; $('#box').style.display='none';
-  if(!f){setStatus('Nessuna immagine selezionata','err');return;}
-  imgData=f;
-  setStatus('Immagine caricata – premi “Estrai dati”','ok');
+let imgFile=null;
+$('#file').addEventListener('change',e=>{
+  imgFile=e.target.files[0]; $('#box').style.display='none'; $('#go').disabled=!imgFile;
+  imgFile ? setStatus('Immagine caricata – premi “Estrai dati”','ok')
+          : setStatus('Nessuna immagine selezionata','err');
+});
+
+$('#go').addEventListener('click',async ()=>{
+  if(!imgFile){setStatus('Carica prima un’immagine','err');return;}
+  $('#go').disabled=true; setStatus('Avvio OCR…','info');
+
+  /* ---- OCR con whitelist numerica ---- */
+  const worker = await createWorker({
+    logger: m => { if(m.status==='recognizing text') setStatus(`OCR ${Math.round(m.progress*100)} %…`,'info'); }
+  });
+  await worker.loadLanguage('ita');
+  await worker.initialize('ita');
+  await worker.setParameters({ tessedit_char_whitelist: '0123456789.,%ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz ' });
+
+  const { data:{ text } } = await worker.recognize(imgFile);
+  await worker.terminate();
+
+  setStatus('Parsing quadro LM…','info');
+  const lm = parseLM(text);
+  render(lm.blockRaw,lm.data);
+  $('#box').style.display='block';
+
+  Object.keys(lm.data).length ? setStatus('✓ Dati estratti','ok')
+                              : setStatus('Valori LM non trovati – aumenta zoom o nitidezza','err');
   $('#go').disabled=false;
 });
 
-$('#go').addEventListener('click',async()=>{
-  if(!imgData){setStatus('Carica prima un’immagine','err');return;}
-  $('#go').disabled=true; setStatus('OCR in corso…','info');
-  try{
-    const {data:{text}} = await Tesseract.recognize(imgData,'ita',{ logger:m=>{ if(m.status==='recognizing text') setStatus('OCR '+Math.round(m.progress*100)+' %…','info'); } });
-    setStatus('Parsing LM…','info');
-    const lm=parseLM(text);
-    render(lm.text,lm.data);
-    if(Object.keys(lm.data).length) setStatus('✓ Dati estratti','ok');
-    else setStatus('Valori LM non trovati','err');
-  }catch(err){
-    console.error(err); setStatus('Errore: '+err.message,'err');
-  }
-  $('#go').disabled=false;
-});
-
-/* -------- parsing -------- */
+/* ---------- PARSING ---------- */
 function parseLM(txt){
-  const flat=txt.replace(/\\n+/g,' ').replace(/\\s{2,}/g,' ').trim();
-  const blk = flat;                       // l’immagine contiene solo LM
-  const out={};
+  const flat = txt.replace(/\\n+/g,' ').replace(/\\s{2,}/g,' ').trim();
+  const blk  = flat;                          // tutta l'immagine ≈ quadro LM
+  const out  = {};
 
-  // LM22 – ATECO + coeff + componenti + reddito
-  let m=blk.match(/LM\\s*22\\s+(\\d{4,6})\\s+(\\d{1,3})%?\\s+(\\d[\\d\\.]*,[\\d]{2}).+?(\\d[\\d\\.]*,[\\d]{2})/i)||
-         blk.match(/Codice attività\\s+(\\d{4,6}).+?Coeff\\w*\\s+(\\d{1,3})%?.+?Componenti positivi[^\\d]*(\\d[\\d\\.]*,[\\d]{2}).+?Reddito per attività[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i);
+  // LM22 - ATECO, coefficiente, componenti, reddito attività
+  let m = blk.match(/LM\\s*22\\s+(\\d{4,6})\\s+(\\d{1,3})%?\\s+(\\d[\\d\\.]*,[\\d]{2}).+?(\\d[\\d\\.]*,[\\d]{2})/i) ||
+          blk.match(/Codice attività\\s+(\\d{4,6}).+?Coeff\\w*\\s+(\\d{1,3})%?.+?Componenti positivi[^\\d]*(\\d[\\d\\.]*,[\\d]{2}).+?Reddito per attività[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i);
   if(m){
     out['Codice ATECO']           = m[1];
     out['Coeff. redditività (%)'] = m[2];
@@ -89,37 +96,42 @@ function parseLM(txt){
     out['Reddito per attività']   = m[4];
   }
 
-  // LM35 – Contributi
-  m = blk.match(/LM\\s*35[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i) || blk.match(/Contributi[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i);
+  // LM35 - Contributi versati
+  m = blk.match(/LM\\s*35[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i) ||
+      blk.match(/Contributi[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i);
   if(m) out['Contributi versati'] = m[1];
 
-  // LM36 – Reddito netto
-  m = blk.match(/LM\\s*36[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i) || blk.match(/Reddito netto[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i);
+  // LM36 - Reddito netto
+  m = blk.match(/LM\\s*36[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i) ||
+      blk.match(/Reddito netto[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i);
   if(m) out['Reddito netto'] = m[1];
 
-  // LM39 – Imposta sostitutiva
-  m = blk.match(/LM\\s*39[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i) || blk.match(/Imposta sostitutiva[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i);
+  // LM39 - Imposta sostitutiva
+  m = blk.match(/LM\\s*39[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i) ||
+      blk.match(/Imposta sostitutiva[^\\d]*(\\d[\\d\\.]*,[\\d]{2})/i);
   if(m) out['Imposta sostitutiva'] = m[1];
 
-  return{data:out,text:flat};
+  return{data:out,blockRaw:blk};
 }
 
-/* -------- rendering -------- */
+/* ---------- RENDER ---------- */
 function render(raw,obj){
-  $('#raw').textContent=raw.slice(0,6000)+(raw.length>6000?'…':'');
-  const box=$('#tbl');
-  if(!Object.keys(obj).length){box.innerHTML='<em>Nessun dato LM estratto</em>'; $('#box').style.display='block'; return;}
+  $('#raw').textContent = raw.slice(0,6000)+(raw.length>6000?'…':'');
+  const box = $('#tbl');
+  if(!Object.keys(obj).length){
+    box.innerHTML = '<em>Nessun dato estratto</em>';
+    return;
+  }
   const tbl=document.createElement('table');
   tbl.innerHTML='<thead><tr><th>Campo</th><th>Valore</th></tr></thead>';
-  const tbody=document.createElement('tbody');
+  const tb=document.createElement('tbody');
   Object.entries(obj).forEach(([k,v])=>{
     const tr=document.createElement('tr');
     tr.innerHTML=`<td>${k}</td><td>${v}</td>`;
-    tbody.appendChild(tr);
+    tb.appendChild(tr);
   });
-  tbl.appendChild(tbody);
+  tbl.appendChild(tb);
   box.innerHTML=''; box.appendChild(tbl);
-  $('#box').style.display='block';
 }
 </script>
 </body>
